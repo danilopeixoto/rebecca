@@ -77,9 +77,9 @@ Image3 * readImage(const std::string & filename) {
         file.read((char *)data, sizeof(data));
 
         pixels[i] = Color3(
-            clamp(data[0] / (double)depth, 0, 1.0),
-            clamp(data[1] / (double)depth, 0, 1.0),
-            clamp(data[2] / (double)depth, 0, 1.0));
+            saturate(data[0] / (float)depth),
+            saturate(data[1] / (float)depth),
+            saturate(data[2] / (float)depth));
     }
 
     file.close();
@@ -100,9 +100,9 @@ bool writeImage(const std::string & filename, const Image3 * image3) {
         const Color3 & pixel = (*image3)[i];
         unsigned char data[3];
 
-        data[0] = (unsigned char)(clamp(pixel.r, 0, 1.0) * depth);
-        data[1] = (unsigned char)(clamp(pixel.g, 0, 1.0) * depth);
-        data[2] = (unsigned char)(clamp(pixel.b, 0, 1.0) * depth);
+        data[0] = (unsigned char)(saturate(pixel.r) * depth);
+        data[1] = (unsigned char)(saturate(pixel.g) * depth);
+        data[2] = (unsigned char)(saturate(pixel.b) * depth);
 
         file.write((const char *)data, sizeof(data));
     }
@@ -266,16 +266,25 @@ Vector3 barycentric(
     Vector3 v1 = vertex2 - vertex0;
     Vector3 v2 = point - vertex0;
 
-    double inverseD = 1.0 / (v0.x * v1.y - v0.y * v1.x);
+    float inverseD = 1.0f / (v0.x * v1.y - v0.y * v1.x);
 
-    double v = (v2.x * v1.y - v2.y * v1.x) * inverseD;
-    double w = (v0.x * v2.y - v0.y * v2.x) * inverseD;
+    float v = (v2.x * v1.y - v2.y * v1.x) * inverseD;
+    float w = (v0.x * v2.y - v0.y * v2.x) * inverseD;
 
-    return Vector3(1.0 - v - w, v, w);
+    return Vector3(1.0f - v - w, v, w);
 }
-Vector3 calculateNormal(
+Vector3 calculateVectorArea(
     const Vector3 & vertex0, const Vector3 & vertex1, const Vector3 & vertex2) {
-    return (vertex1 - vertex0).cross(vertex2 - vertex0).normalize();
+    return (vertex1 - vertex0).cross(vertex2 - vertex0);
+}
+void calculateTangents(
+        const Vector3 & normal, Vector3 & tangentU, Vector3 & tangentV) {
+    if (std::abs(normal.x) >= std::abs(normal.y))
+        tangentU = Vector3(normal.z, 0.0f, -normal.x).normalize();
+    else
+        tangentU = Vector3(0.0f, -normal.z, normal.y).normalize();
+    
+    tangentV = normal.cross(tangentU);
 }
 
 size_t time() {
@@ -288,60 +297,60 @@ size_t time() {
 void randomSeed(size_t seed) {
     std::srand(seed);
 }
-double uniformRandom() {
-    return std::rand() / (RAND_MAX + 1.0);
+float uniformRandom() {
+    return std::rand() / (RAND_MAX + 1.0f);
 }
 Vector2 uniformSampleDisk(const Vector2 & sample) {
-    double radius = std::sqrt(sample.x);
-    double theta = 2.0 * AURORA_PI * sample.y;
+    float radius = std::sqrt(sample.x);
+    float theta = 2.0f * AURORA_PI * sample.y;
 
     return radius * Vector2(std::cos(theta), std::sin(theta));
 }
 Vector2 concentricSampleDisk(const Vector2 & sample) {
-    Vector2 offset = 2.0 * sample - Vector2(1.0, 1.0);
+    Vector2 offset = 2.0f * sample - Vector2(1.0f, 1.0f);
     
-    if (offset.x == 0 && offset.y == 0)
-        return Vector2(0, 0);
+    if (offset.x == 0.0f && offset.y == 0.0f)
+        return Vector2(0.0f, 0.0f);
     
-    double radius, theta;
+    float radius, theta;
     
     if (std::abs(offset.x) > std::abs(offset.y)) {
         radius = offset.x;
-        theta = 0.25 * AURORA_PI * offset.y / offset.x;
+        theta = 0.25f * AURORA_PI * offset.y / offset.x;
     }
     else {
         radius = offset.y;
-        theta = AURORA_PI * (0.5 - 0.25 * offset.x / offset.y);
+        theta = AURORA_PI * (0.5f - 0.25f * offset.x / offset.y);
     }
     
     return radius * Vector2(std::cos(theta), std::sin(theta));
 }
 Vector3 uniformSampleHemisphere(const Vector2 & sample) {
-    double z = 1.0 - sample.x;
-    double s = std::sqrt(1.0 - z * z);
-    double phi = 2.0 * AURORA_PI * sample.y;
+    float z = 1.0f - sample.x;
+    float s = std::sqrt(1.0f - z * z);
+    float phi = 2.0f * AURORA_PI * sample.y;
 
     return Vector3(s * std::cos(phi), s * std::sin(phi), z);
 }
 Vector3 uniformSampleCosineWeightedHemisphere(const Vector2 & sample) {
-    double s = std::sqrt(sample.x);
-    double phi = 2.0 * AURORA_PI * sample.y;
+    float s = std::sqrt(sample.x);
+    float phi = 2.0f * AURORA_PI * sample.y;
 
-    return Vector3(s * std::cos(phi), s * std::sin(phi), std::sqrt(1.0 - sample.x));
+    return Vector3(s * std::cos(phi), s * std::sin(phi), std::sqrt(1.0f - sample.x));
 }
 Vector3 uniformSampleTriangle(const Vector2 & sample) {
-    double s = std::sqrt(sample.x);
-    double u = 1.0 - s;
-    double v = s * sample.y;
+    float s = std::sqrt(sample.x);
+    float u = 1.0f - s;
+    float v = s * sample.y;
 
-    return Vector3(u, v, 1.0 - u - v);
+    return Vector3(u, v, 1.0f - u - v);
 }
 
 Color3 toColor3(const Vector3 & vector3) {
 	return Color3(vector3.x, vector3.y, vector3.z);
 }
 Color4 toColor4(const Vector3 & vector3) {
-	return Color4(vector3.x, vector3.y, vector3.z, 1.0);
+	return Color4(vector3.x, vector3.y, vector3.z, 1.0f);
 }
 
 AURORA_NAMESPACE_END

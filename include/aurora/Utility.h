@@ -58,9 +58,12 @@ bool writeMesh(const std::string & filename, const TriangleMesh * triangleMesh);
 Vector3 barycentric(
     const Vector3 & point,
     const Vector3 & vertex0, const Vector3 & vertex1, const Vector3 & vertex2);
-// Retorna normal de plano definido por três pontos (triângulo)
-Vector3 calculateNormal(
+// Retorna vetor normal de plano com peso de área definido por três pontos
+Vector3 calculateVectorArea(
     const Vector3 & vertex0, const Vector3 & vertex1, const Vector3 & vertex2);
+// Retorna dois vetores tangentes ao plano definido por vetor normal
+void calculateTangents(
+        const Vector3 & normal, Vector3 & tangentU, Vector3 & tangentV);
 
 // Retorna tempo atual em milisegundos (geralmente desde 00:00 horas de 1 de janeiro de 1970 UTC)
 size_t time();
@@ -68,7 +71,7 @@ size_t time();
 // Inicializa gerador de amostras com semente aleatória
 void randomSeed(size_t seed);
 // Retorna amostra aleatória uniforme no intervalo real "[0, 1)"
-double uniformRandom();
+float uniformRandom();
 // Retorna amostra aletória uniforme (ponto 2D) dentro de círculo de raio unitário
 Vector2 uniformSampleDisk(const Vector2 & sample);
 // Retorna amostra aletória concêntrica (ponto 2D) dentro de círculo de raio unitário
