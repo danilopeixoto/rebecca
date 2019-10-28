@@ -29,6 +29,7 @@
 #include <aurora/Utility.h>
 #include <aurora/Vector.h>
 #include <aurora/Color.h>
+#include <aurora/Matrix.h>
 #include <aurora/TriangleMesh.h>
 
 #include <cmath>
@@ -325,7 +326,7 @@ struct Triangle : Shape {
         const Vector3 & v2 = vertices[2].position;
         
         Vector3 normal = calculateVectorArea(v0, v1, v2);
-        area = 0.5f * normal.length();
+        area = normal.length() * 0.5f;
         
         return *this;
     }
@@ -412,27 +413,135 @@ struct Scene {
     }
 };
 
-int main(int argc, char ** argv) {
-    BSDF * bsdf = new BSDF(BSDFType::Diffuse, Color3(1.0f, 1.0f, 1.0f));
+struct Film {
+    float width;
+    float height;
     
-    Shape * sphere = new Sphere(Vector3(0.0f, 0.0f, 0.0f), 1.0f, bsdf);
+    Film() {}
+    Film(float width, float height) {
+        this->width = width;
+        this->height = height;
+    }
+    
+    float aspectRatio() const {
+        return width / height;
+    }
+};
+
+struct Camera {
+    float fieldOfView;
+    float focalLength;
+    float aperture;
+    Film * film;
+    Matrix4 worldMatrix;
+    
+    Camera() {}
+    Camera(
+            float fieldOfView, float focalLength, float aperture,
+            Film * film, const Matrix4 & worldMatrix) {
+        this->fieldOfView = fieldOfView;
+        this->focalLength = focalLength;
+        this->aperture = aperture;
+        this->film = film;
+        this->worldMatrix = worldMatrix;
+    }
+    
+    void lookAt(
+            const Vector3 & position,
+            const Vector3 & target, const Vector3 & up) {
+        Vector3 w = (position - target).normalize();
+        Vector3 u = up.cross(w).normalize();
+        Vector3 v = w.cross(u);
+        
+        worldMatrix[0][0] = u.x;
+        worldMatrix[0][1] = u.y;
+        worldMatrix[0][2] = u.z;
+        worldMatrix[0][3] = 0.0f;
+        
+        worldMatrix[1][0] = v.x;
+        worldMatrix[1][1] = v.y;
+        worldMatrix[1][2] = v.z;
+        worldMatrix[1][3] = 0.0f;
+        
+        worldMatrix[2][0] = w.x;
+        worldMatrix[2][1] = w.y;
+        worldMatrix[2][2] = w.z;
+        worldMatrix[2][3] = 0.0f;
+        
+        worldMatrix[3][0] = position.x;
+        worldMatrix[3][1] = position.y;
+        worldMatrix[3][2] = position.z;
+        worldMatrix[3][3] = 1.0f;
+    }
+    void generateRay(
+            float x, float y, const Vector2 & sample,
+            Ray & ray) const {
+        float scale = focalLength * std::tan(fieldOfView * 0.5f);
+        
+        Vector3 position;
+        
+        if (aperture > 0.0f) {
+            float radius = 0.5f * focalLength / aperture;
+            Vector2 diskSample = radius * concentricSampleDisk(sample);
+            
+            position.x = diskSample.x;
+            position.y = diskSample.y;
+            position.z = 0.0f;
+        }
+        
+        position *= worldMatrix;
+        
+        Vector3 pixel;
+        
+        pixel.x = (2.0f * (x + sample.x + 0.5f) / film->width - 1.0f) * scale * film->aspectRatio();
+        pixel.y = (1.0f - 2.0f * (y + sample.y + 0.5f) / film->height) * scale;
+        pixel.z = -focalLength;
+        
+        pixel *= worldMatrix;
+        
+        Vector3 direction = (pixel - position).normalize();
+        
+        ray.origin = position;
+        ray.direction = direction;
+    }
+};
+
+int main(int argc, char ** argv) {
+    BSDF diffuse(BSDFType::Diffuse, Color3(1.0f, 1.0f, 1.0f));
+    
+    Sphere sphere(Vector3(0.0f, 0.0f, 0.0f), 1.0f, &diffuse);
     
     Vertex vertex0(Vector3(-0.5f, -0.5f, 0.0f), Vector3(0.0f, 0.0f, 1.0f), Vector2(0.0f, 0.0f));
     Vertex vertex1(Vector3(0.5f, -0.5f, 0.0f), Vector3(0.0f, 0.0f, 1.0f), Vector2(1.0f, 0.0f));
     Vertex vertex2(Vector3(0.0f, 1.0f, 0.0f), Vector3(0.0f, 0.0f, 1.0f), Vector2(0.0f, 1.0f));
     
-    Shape * triangle = new Triangle(vertex0, vertex1, vertex2, bsdf);
+    Triangle triangle(vertex0, vertex1, vertex2, &diffuse);
     
     std::vector<Shape *> shapes;
     
-    shapes.push_back(sphere);
-    shapes.push_back(triangle);
+    shapes.push_back(&sphere);
+    shapes.push_back(&triangle);
     
     Scene scene(shapes);
     
-    Ray ray(Vector3(0.0f, 0.0f, 10.0f), Vector3(0.0f, 0.0f, -1.0f));
-    Intersection intersection;
+    Film film(800, 600);
     
+    Matrix4 worldMatrix(
+        1.0f, 0.0f, 0.0f, 0.0f,
+        0.0f, 1.0f, 0.0f, 0.0f,
+        0.0f, 0.0f, 1.0f, 0.0f,
+        0.0f, 0.0f, 0.0f, 1.0f);
+    
+    Camera camera(radians(20.0f), 1.0f, 0.0f, &film, worldMatrix);
+    camera.lookAt(Vector3(0.0f, 0.0f, 35.0f), Vector3(0.0f, 0.0f, 0.0f), Vector3(0.0f, 1.0f, 0.0f));
+    
+    Ray ray;
+    camera.generateRay(400.0f, 300.0f, Vector2(), ray);
+    
+    std::cout << "Ray origin: " << ray.origin << std::endl;
+    std::cout << "Ray direction: " << ray.direction << std::endl;
+    
+    Intersection intersection;
     scene.intersects(ray, intersection);
     
     std::cout << "Hit: " << intersection.hit << std::endl;
@@ -456,11 +565,6 @@ int main(int argc, char ** argv) {
         std::cout << "Light point: " << shaderGlobals.lightPoint << std::endl;
         std::cout << "Light normal: " << shaderGlobals.lightNormal << std::endl;
     }
-    
-    delete bsdf;
-    
-    delete sphere;
-    delete triangle;
     
     return 0;
 }
