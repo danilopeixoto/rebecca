@@ -30,6 +30,7 @@
 #include <aurora/Vector.h>
 #include <aurora/Color.h>
 #include <aurora/Matrix.h>
+#include <aurora/Image.h>
 #include <aurora/TriangleMesh.h>
 
 #include <cmath>
@@ -38,7 +39,38 @@
 #include <iostream>
 #include <vector>
 
+#include <chrono>
+
 AURORA_NAMESPACE_USING
+
+float uniformRandom1D() {
+    return uniformRandom();
+}
+Vector2 uniformRandom2D() {
+    return Vector2(uniformRandom1D(), uniformRandom1D());
+}
+
+void stratifiedSamples(size_t count, std::vector<Vector2> & samples) {
+    samples.reserve(count);
+    
+    size_t size = std::sqrt(count);
+    float inverseSize = 1.0f / size;
+    
+    for (size_t i = 0; i < count; i++) {
+        Vector2 offset(i / size, i % size);
+        Vector2 point = (offset + uniformRandom2D()) * inverseSize;
+        
+        samples.push_back(point);
+    }
+}
+
+float gaussian1D(float sample, float width) {
+    float radius = width * 0.5f;
+    return std::fmax(0.0f, std::exp(-sample * sample) - std::exp(-radius * radius));
+}
+float gaussian2D(const Vector2 & sample, float width) {
+    return gaussian1D(sample.x, width) * gaussian1D(sample.y, width);
+}
 
 struct Ray {
     Vector3 origin;
@@ -191,7 +223,7 @@ struct Sphere : Shape {
         float theta = std::atan2(shaderGlobals.normal.x, shaderGlobals.normal.z);
         float phi = std::acos(shaderGlobals.normal.y);
         
-        shaderGlobals.uv.x = theta * AURORA_INV_PI * 0.5f;
+        shaderGlobals.uv.x = theta * AURORA_INV_PI + 0.5f;
         shaderGlobals.uv.y = phi * AURORA_INV_PI;
         
         shaderGlobals.textureCoordinate.x = shaderGlobals.uv.x;
@@ -300,9 +332,9 @@ struct Triangle : Shape {
         const Vector2 & t1 = vertices[1].textureCoordinate;
         const Vector2 & t2 = vertices[2].textureCoordinate;
         
-        Vector3 b = barycentric(shaderGlobals.point, p0, p1, p2);
-        
         shaderGlobals.point = ray.point(intersection.distance);
+        
+        Vector3 b = barycentric(shaderGlobals.point, p0, p1, p2);
         
         shaderGlobals.normal = (n0 * b.x + n1 * b.y + n2 * b.z).normalize();
         shaderGlobals.textureCoordinate = t0 * b.x + t1 * b.y + t2 * b.z;
@@ -340,33 +372,33 @@ struct Scene {
         this->shapes = shapes;
     }
     
-    Scene & fromMesh(const TriangleMesh & triangleMesh, BSDF * bsdf = nullptr) {
-        size_t triangleCount = triangleMesh.getTriangleCount();
+    Scene & fromMesh(const TriangleMesh * triangleMesh, BSDF * bsdf = nullptr) {
+        size_t triangleCount = triangleMesh->getTriangleCount();
         
-        bool hasNormals = triangleMesh.hasNormals();
-        bool hasTextureCoordinates = triangleMesh.hasTextureCoordinates();
+        bool hasNormals = triangleMesh->hasNormals();
+        bool hasTextureCoordinates = triangleMesh->hasTextureCoordinates();
         
         shapes.reserve(shapes.size() + triangleCount);
         
         for (size_t i = 0; i < triangleCount; i++) {
             size_t indices[3];
             
-            triangleMesh.getVertexIndices(i, indices[0], indices[1], indices[2]);
+            triangleMesh->getVertexIndices(i, indices[0], indices[1], indices[2]);
             
             Vertex vertex0;
             Vertex vertex1;
             Vertex vertex2;
             
-            vertex0.position = triangleMesh.getVertex(indices[0]);
-            vertex1.position = triangleMesh.getVertex(indices[1]);
-            vertex2.position = triangleMesh.getVertex(indices[2]);
+            vertex0.position = triangleMesh->getVertex(indices[0]);
+            vertex1.position = triangleMesh->getVertex(indices[1]);
+            vertex2.position = triangleMesh->getVertex(indices[2]);
             
             if (hasNormals) {
-                triangleMesh.getNormalIndices(i, indices[0], indices[1], indices[2]);
+                triangleMesh->getNormalIndices(i, indices[0], indices[1], indices[2]);
                 
-                vertex0.normal = triangleMesh.getNormal(indices[0]);
-                vertex1.normal = triangleMesh.getNormal(indices[1]);
-                vertex2.normal = triangleMesh.getNormal(indices[2]);
+                vertex0.normal = triangleMesh->getNormal(indices[0]);
+                vertex1.normal = triangleMesh->getNormal(indices[1]);
+                vertex2.normal = triangleMesh->getNormal(indices[2]);
             }
             else {
                 vertex0.normal = calculateVectorArea(
@@ -377,11 +409,11 @@ struct Scene {
             }
             
             if (hasTextureCoordinates) {
-                triangleMesh.getTextureIndices(i, indices[0], indices[1], indices[2]);
+                triangleMesh->getTextureIndices(i, indices[0], indices[1], indices[2]);
                 
-                vertex0.textureCoordinate = triangleMesh.getTextureCoordinates(indices[0]);
-                vertex1.textureCoordinate = triangleMesh.getTextureCoordinates(indices[1]);
-                vertex2.textureCoordinate = triangleMesh.getTextureCoordinates(indices[2]);
+                vertex0.textureCoordinate = triangleMesh->getTextureCoordinates(indices[0]);
+                vertex1.textureCoordinate = triangleMesh->getTextureCoordinates(indices[1]);
+                vertex2.textureCoordinate = triangleMesh->getTextureCoordinates(indices[2]);
             }
             else {
                 vertex0.textureCoordinate = Vector2(0.0f, 0.0f);
@@ -474,7 +506,8 @@ struct Camera {
         worldMatrix[3][3] = 1.0f;
     }
     void generateRay(
-            float x, float y, const Vector2 & sample,
+            float x, float y,
+            const Vector2 & sample, const Vector2 & apertureSample,
             Ray & ray) const {
         float scale = focalLength * std::tan(fieldOfView * 0.5f);
         
@@ -482,7 +515,7 @@ struct Camera {
         
         if (aperture > 0.0f) {
             float radius = 0.5f * focalLength / aperture;
-            Vector2 diskSample = radius * concentricSampleDisk(sample);
+            Vector2 diskSample = radius * concentricSampleDisk(apertureSample);
             
             position.x = diskSample.x;
             position.y = diskSample.y;
@@ -506,25 +539,142 @@ struct Camera {
     }
 };
 
+struct RenderOptions {
+    size_t width;
+    size_t height;
+    size_t maximumDepth;
+    size_t cameraSamples;
+    size_t lightSamples;
+    size_t diffuseSamples;
+    float filterWidth;
+    float exposure;
+    float gamma;
+    
+    RenderOptions() {}
+    RenderOptions(
+            size_t width, size_t height, size_t maximumDepth,
+            size_t cameraSamples, size_t lightSamples, size_t diffuseSamples,
+            float filterWidth, float exposure, float gamma) {
+        this->width = width;
+        this->height = height;
+        this->maximumDepth = maximumDepth;
+        this->cameraSamples = cameraSamples;
+        this->lightSamples = lightSamples;
+        this->diffuseSamples = diffuseSamples;
+        this->filterWidth = filterWidth;
+        this->exposure = exposure;
+        this->gamma = gamma;
+    }
+};
+
+struct Renderer {
+    RenderOptions * options;
+    Camera * camera;
+    Scene * scene;
+    
+    Renderer() {}
+    Renderer(RenderOptions * options, Camera * camera, Scene * scene) {
+        this->options = options;
+        this->camera = camera;
+        this->scene = scene;
+    }
+    
+    Color3 computeDirectIllumination(
+            const BSDF * bsdf, ShaderGlobals & shaderGlobals) const {
+        return bsdf->color;
+    }
+    Color3 computeIndirectIllumination(
+            const BSDF * bsdf, ShaderGlobals & shaderGlobals) const {
+        return Color3();
+    }
+    
+    Color3 trace(const Ray & ray, size_t depth) const {
+        Intersection intersection;
+        
+        if (scene->intersects(ray, intersection)) {
+            Shape * shape = scene->shapes[intersection.index];
+            BSDF * bsdf = shape->bsdf;
+            
+            if (bsdf->type == BSDFType::Light)
+                return bsdf->color;
+            
+            ShaderGlobals shaderGlobals;
+            shape->calculateShaderGlobals(ray, intersection, shaderGlobals);
+            
+            return computeDirectIllumination(bsdf, shaderGlobals) +
+                   computeIndirectIllumination(bsdf, shaderGlobals);
+        }
+        
+        return Color3();
+    }
+    void render(Image3 * image) const {
+        const Vector2 half(0.5f, 0.5f);
+        
+        #pragma omp parallel for schedule(dynamic) num_threads(4)
+        for (size_t i = 0; i < options->width; i++) {
+            for (size_t j = 0; j < options->height; j++) {
+                std::vector<Vector2> samples;
+                stratifiedSamples(options->cameraSamples, samples);
+                
+                Color3 color;
+                float weight = 0.0f;
+                
+                for (size_t k = 0; k < options->cameraSamples; k++) {
+                    Vector2 sample = (samples[k] - half) * options->filterWidth;
+                    Vector2 apertureSample = samples[k];
+                    
+                    Ray ray;
+                    camera->generateRay(i, j, sample, apertureSample, ray);
+                    
+                    float w = gaussian2D(sample, options->filterWidth);
+                    
+                    color += trace(ray, 0) * w;
+                    weight += w;
+                }
+                
+                color /= weight;
+                
+                color.applyExposure(options->exposure);
+                color.applyGamma(options->gamma);
+                
+                image->setPixel(i, j, color);
+            }
+        }
+    }
+};
+
 int main(int argc, char ** argv) {
-    BSDF diffuse(BSDFType::Diffuse, Color3(1.0f, 1.0f, 1.0f));
+    RenderOptions options(500, 500, 1, 4, 1, 1, 2.0f, 0.0f, 2.2f);
     
-    Sphere sphere(Vector3(0.0f, 0.0f, 0.0f), 1.0f, &diffuse);
+    BSDF light(BSDFType::Light, Color3(1.0f, 1.0f, 1.0f));
+    BSDF diffuse(BSDFType::Diffuse, Color3(1.0f, 0.5f, 1.0f));
     
-    Vertex vertex0(Vector3(-0.5f, -0.5f, 0.0f), Vector3(0.0f, 0.0f, 1.0f), Vector2(0.0f, 0.0f));
-    Vertex vertex1(Vector3(0.5f, -0.5f, 0.0f), Vector3(0.0f, 0.0f, 1.0f), Vector2(1.0f, 0.0f));
-    Vertex vertex2(Vector3(0.0f, 1.0f, 0.0f), Vector3(0.0f, 0.0f, 1.0f), Vector2(0.0f, 1.0f));
+    // Sphere sphere(Vector3(-2.0f, 0.0f, 5.0f), 1.0f, &diffuse);
     
-    Triangle triangle(vertex0, vertex1, vertex2, &diffuse);
+    // Vertex vertex0(Vector3(-0.5f, -0.5f, 0.0f), Vector3(0.0f, 0.0f, 1.0f), Vector2(0.0f, 0.0f));
+    // Vertex vertex1(Vector3(0.5f, -0.5f, 0.0f), Vector3(0.0f, 0.0f, 1.0f), Vector2(1.0f, 0.0f));
+    // Vertex vertex2(Vector3(0.0f, 1.0f, 0.0f), Vector3(0.0f, 0.0f, 1.0f), Vector2(0.0f, 1.0f));
+    
+    // Triangle triangle(vertex0, vertex1, vertex2, &diffuse);
     
     std::vector<Shape *> shapes;
     
-    shapes.push_back(&sphere);
-    shapes.push_back(&triangle);
+    // shapes.push_back(&sphere);
+    // shapes.push_back(&triangle);
     
     Scene scene(shapes);
     
-    Film film(800, 600);
+    TriangleMesh * mesh = readMesh("../res/cornell_box.obj");
+    
+    if (mesh)
+        scene.fromMesh(mesh, &diffuse);
+    
+    delete mesh;
+    
+    scene.shapes[10]->bsdf = &light;
+    scene.shapes[11]->bsdf = &light;
+    
+    Film film((float)options.width, (float)options.height);
     
     Matrix4 worldMatrix(
         1.0f, 0.0f, 0.0f, 0.0f,
@@ -533,38 +683,25 @@ int main(int argc, char ** argv) {
         0.0f, 0.0f, 0.0f, 1.0f);
     
     Camera camera(radians(20.0f), 1.0f, 0.0f, &film, worldMatrix);
-    camera.lookAt(Vector3(0.0f, 0.0f, 35.0f), Vector3(0.0f, 0.0f, 0.0f), Vector3(0.0f, 1.0f, 0.0f));
+    camera.lookAt(Vector3(0.0f, 0.0f, 60.0f), Vector3(0.0f, 0.0f, 0.0f), Vector3(0.0f, 1.0f, 0.0f));
     
-    Ray ray;
-    camera.generateRay(400.0f, 300.0f, Vector2(), ray);
+    Renderer renderer(&options, &camera, &scene);
     
-    std::cout << "Ray origin: " << ray.origin << std::endl;
-    std::cout << "Ray direction: " << ray.direction << std::endl;
+    Image3 image(options.width, options.height);
     
-    Intersection intersection;
-    scene.intersects(ray, intersection);
+    auto start = std::chrono::high_resolution_clock::now();
     
-    std::cout << "Hit: " << intersection.hit << std::endl;
-    std::cout << "Distance: " << intersection.distance << std::endl;
-    std::cout << "Index: " << intersection.index << std::endl;
+    renderer.render(&image);
     
-    if (intersection.hit) {
-        Shape * shape = scene.shapes[intersection.index];
-        
-        ShaderGlobals shaderGlobals;
-        shape->calculateShaderGlobals(ray, intersection, shaderGlobals);
-        
-        std::cout << "Point: " << shaderGlobals.point << std::endl;
-        std::cout << "Normal: " << shaderGlobals.normal << std::endl;
-        std::cout << "Texture coordinate: " << shaderGlobals.textureCoordinate << std::endl;
-        std::cout << "UV: " << shaderGlobals.uv << std::endl;
-        std::cout << "Tangent U: " << shaderGlobals.tangentU << std::endl;
-        std::cout << "Tangent V: " << shaderGlobals.tangentV << std::endl;
-        std::cout << "View direction: " << shaderGlobals.viewDirection << std::endl;
-        std::cout << "Light direction: " << shaderGlobals.lightDirection << std::endl;
-        std::cout << "Light point: " << shaderGlobals.lightPoint << std::endl;
-        std::cout << "Light normal: " << shaderGlobals.lightNormal << std::endl;
-    }
+    auto finish = std::chrono::high_resolution_clock::now();
+    std::chrono::duration<float> duration = finish - start;
+    
+    std::cout << "Elapsed time: " << duration.count() << " seconds" << std::endl;
+    
+    if (writeImage("../output/image.ppm", &image))
+        std::cout << "Image saved." << std::endl;
+    else
+        std::cout << "Failed to save image." << std::endl;
     
     return 0;
 }

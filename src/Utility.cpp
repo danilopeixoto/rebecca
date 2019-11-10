@@ -265,12 +265,18 @@ Vector3 barycentric(
     Vector3 v0 = vertex1 - vertex0;
     Vector3 v1 = vertex2 - vertex0;
     Vector3 v2 = point - vertex0;
-
-    float inverseD = 1.0f / (v0.x * v1.y - v0.y * v1.x);
-
-    float v = (v2.x * v1.y - v2.y * v1.x) * inverseD;
-    float w = (v0.x * v2.y - v0.y * v2.x) * inverseD;
-
+    
+    float d00 = v0.dot(v0);
+    float d01 = v0.dot(v1);
+    float d11 = v1.dot(v1);
+    float d20 = v2.dot(v0);
+    float d21 = v2.dot(v1);
+    
+    float inverseD = d00 * d11 - d01 * d01;
+    
+    float v = (d11 * d20 - d01 * d21) / inverseD;
+    float w = (d00 * d21 - d01 * d20) / inverseD;
+    
     return Vector3(1.0f - v - w, v, w);
 }
 Vector3 calculateVectorArea(
