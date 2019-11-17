@@ -39,8 +39,6 @@
 #include <iostream>
 #include <vector>
 
-#include <chrono>
-
 AURORA_NAMESPACE_USING
 
 float uniformRandom1D() {
@@ -168,6 +166,8 @@ struct Shape {
             const Ray & ray, const Intersection & intersection,
             ShaderGlobals & shaderGlobals) const = 0;
     virtual float surfaceArea() const = 0;
+    
+    virtual Vector3 uniformSample(const Vector2 & sample) const = 0;
 };
 
 struct Sphere : Shape {
@@ -241,6 +241,10 @@ struct Sphere : Shape {
     }
     virtual float surfaceArea() const {
         return 4.0f * AURORA_PI * radius * radius;
+    }
+    
+    virtual Vector3 uniformSample(const Vector2 & sample) const {
+        return position + radius * uniformSampleSphere(sample);
     }
 };
 
@@ -362,14 +366,28 @@ struct Triangle : Shape {
         
         return *this;
     }
+    
+    virtual Vector3 uniformSample(const Vector2 & sample) const {
+        const Vector3 & v0 = vertices[0].position;
+        const Vector3 & v1 = vertices[1].position;
+        const Vector3 & v2 = vertices[2].position;
+        
+        Vector3 b = uniformSampleTriangle(sample);
+        
+        return b.x * v0 + b.y * v1 + b.z * v2;
+    }
 };
 
 struct Scene {
     std::vector<Shape *> shapes;
+    std::vector<Shape *> lightGroup;
     
     Scene() {}
-    Scene(const std::vector<Shape *> & shapes) {
+    Scene(
+            const std::vector<Shape *> & shapes,
+            const std::vector<Shape *> & lightGroup) {
         this->shapes = shapes;
+        this->lightGroup = lightGroup;
     }
     
     Scene & fromMesh(const TriangleMesh * triangleMesh, BSDF * bsdf = nullptr) {
@@ -584,11 +602,14 @@ struct Renderer {
         return bsdf->color;
     }
     Color3 computeIndirectIllumination(
-            const BSDF * bsdf, ShaderGlobals & shaderGlobals) const {
+            const BSDF * bsdf, ShaderGlobals & shaderGlobals, size_t depth) const {
         return Color3();
     }
     
     Color3 trace(const Ray & ray, size_t depth) const {
+        if (depth >= options->maximumDepth)
+            return Color3();
+        
         Intersection intersection;
         
         if (scene->intersects(ray, intersection)) {
@@ -596,13 +617,13 @@ struct Renderer {
             BSDF * bsdf = shape->bsdf;
             
             if (bsdf->type == BSDFType::Light)
-                return bsdf->color;
+                return depth == 0 ? bsdf->color : Color3();
             
             ShaderGlobals shaderGlobals;
             shape->calculateShaderGlobals(ray, intersection, shaderGlobals);
             
             return computeDirectIllumination(bsdf, shaderGlobals) +
-                   computeIndirectIllumination(bsdf, shaderGlobals);
+                   computeIndirectIllumination(bsdf, shaderGlobals, depth + 1);
         }
         
         return Color3();
@@ -644,35 +665,34 @@ struct Renderer {
 };
 
 int main(int argc, char ** argv) {
-    RenderOptions options(500, 500, 1, 4, 1, 1, 2.0f, 0.0f, 2.2f);
+    RenderOptions options(500, 500, 2, 1, 1, 4, 2.0f, 0.0f, 2.2f);
     
-    BSDF light(BSDFType::Light, Color3(1.0f, 1.0f, 1.0f));
-    BSDF diffuse(BSDFType::Diffuse, Color3(1.0f, 0.5f, 1.0f));
+    BSDF light(BSDFType::Light, Color3(1.0f, 0.65f, 0.3f) * 20.0f);
     
-    // Sphere sphere(Vector3(-2.0f, 0.0f, 5.0f), 1.0f, &diffuse);
+    BSDF whiteDiffuse(BSDFType::Diffuse, Color3(1.0f, 1.0f, 1.0f));
+    BSDF redDiffuse(BSDFType::Diffuse, Color3(0.65f, 0.065f, 0.05f));
+    BSDF greenDiffuse(BSDFType::Diffuse, Color3(0.14f, 0.45f, 0.2f));
     
-    // Vertex vertex0(Vector3(-0.5f, -0.5f, 0.0f), Vector3(0.0f, 0.0f, 1.0f), Vector2(0.0f, 0.0f));
-    // Vertex vertex1(Vector3(0.5f, -0.5f, 0.0f), Vector3(0.0f, 0.0f, 1.0f), Vector2(1.0f, 0.0f));
-    // Vertex vertex2(Vector3(0.0f, 1.0f, 0.0f), Vector3(0.0f, 0.0f, 1.0f), Vector2(0.0f, 1.0f));
-    
-    // Triangle triangle(vertex0, vertex1, vertex2, &diffuse);
-    
-    std::vector<Shape *> shapes;
-    
-    // shapes.push_back(&sphere);
-    // shapes.push_back(&triangle);
-    
-    Scene scene(shapes);
+    Scene scene;
     
     TriangleMesh * mesh = readMesh("../res/cornell_box.obj");
     
     if (mesh)
-        scene.fromMesh(mesh, &diffuse);
+        scene.fromMesh(mesh, &whiteDiffuse);
     
     delete mesh;
     
     scene.shapes[10]->bsdf = &light;
     scene.shapes[11]->bsdf = &light;
+    
+    scene.lightGroup.push_back(scene.shapes[10]);
+    scene.lightGroup.push_back(scene.shapes[11]);
+    
+    scene.shapes[8]->bsdf = &redDiffuse;
+    scene.shapes[9]->bsdf = &redDiffuse;
+    
+    scene.shapes[6]->bsdf = &greenDiffuse;
+    scene.shapes[7]->bsdf = &greenDiffuse;
     
     Film film((float)options.width, (float)options.height);
     
@@ -682,21 +702,21 @@ int main(int argc, char ** argv) {
         0.0f, 0.0f, 1.0f, 0.0f,
         0.0f, 0.0f, 0.0f, 1.0f);
     
-    Camera camera(radians(20.0f), 1.0f, 0.0f, &film, worldMatrix);
-    camera.lookAt(Vector3(0.0f, 0.0f, 60.0f), Vector3(0.0f, 0.0f, 0.0f), Vector3(0.0f, 1.0f, 0.0f));
+    Camera camera(radians(25.0f), 1.0f, 0.0f, &film, worldMatrix);
+    camera.lookAt(Vector3(0.0f, 0.0f, 35.0f), Vector3(0.0f, 0.0f, 0.0f), Vector3(0.0f, 1.0f, 0.0f));
     
     Renderer renderer(&options, &camera, &scene);
     
     Image3 image(options.width, options.height);
     
-    auto start = std::chrono::high_resolution_clock::now();
+    size_t start = time();
     
     renderer.render(&image);
     
-    auto finish = std::chrono::high_resolution_clock::now();
-    std::chrono::duration<float> duration = finish - start;
+    size_t finish = time();
+    float duration = (finish - start) / 1000.0f;
     
-    std::cout << "Elapsed time: " << duration.count() << " seconds" << std::endl;
+    std::cout << "Elapsed time: " << duration << " seconds" << std::endl;
     
     if (writeImage("../output/image.ppm", &image))
         std::cout << "Image saved." << std::endl;

@@ -303,6 +303,9 @@ size_t time() {
 void randomSeed(size_t seed) {
     std::srand(seed);
 }
+int uniformRandom(int minimum, int maximum) {
+    return minimum + std::rand() % (maximum - minimum + 1);
+}
 float uniformRandom() {
     return std::rand() / (RAND_MAX + 1.0f);
 }
@@ -343,6 +346,13 @@ Vector3 uniformSampleCosineWeightedHemisphere(const Vector2 & sample) {
     float phi = 2.0f * AURORA_PI * sample.y;
 
     return Vector3(s * std::cos(phi), s * std::sin(phi), std::sqrt(1.0f - sample.x));
+}
+Vector3 uniformSampleSphere(const Vector2 & sample) {
+    float z = 1.0f - 2.0f * sample.x;
+    float s = std::sqrt(1.0f - z * z);
+    float phi = 2.0f * AURORA_PI * sample.y;
+    
+    return Vector3(s * std::cos(phi), s * std::sin(phi), z);
 }
 Vector3 uniformSampleTriangle(const Vector2 & sample) {
     float s = std::sqrt(sample.x);
